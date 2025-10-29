@@ -1,18 +1,21 @@
 import cv2
 import time
 import threading
-from pynput import keyboard
 import pyautogui
 import numpy as np
 from collections import deque
 import math
+
+# แก้ปัญหา keyboard listener บน macOS Sequoia
+import sys
+import select
 
 # ปรับปรุงประสิทธิภาพ pyautogui
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.0001  # ลดให้ต่ำสุด
 
 # โหลดภาพและประมวลผลอย่างมีประสิทธิภาพ
-def load_and_process_image(image_path):
+def load_and_process_image(image_path, target_width=None, target_height=None):
     print("🔄 กำลังโหลดและประมวลผลภาพ...")
     
     # โหลดภาพเป็น grayscale โดยตรง
@@ -20,21 +23,29 @@ def load_and_process_image(image_path):
     if img is None:
         raise FileNotFoundError(f"❌ ไม่พบไฟล์ {image_path}")
     
-    # ปรับขนาดภาพถ้าใหญ่เกินไป (เพิ่มประสิทธิภาพ)
     h, w = img.shape
-    max_dimension = 2000
-    if max(h, w) > max_dimension:
-        scale = max_dimension / max(h, w)
-        new_w, new_h = int(w * scale), int(h * scale)
+    print(f"📐 ขนาดภาพต้นฉบับ: {w} x {h} pixels")
+    
+    # ถ้ามีการระบุขนาดเป้าหมาย
+    if target_width or target_height:
+        if target_width and target_height:
+            new_w, new_h = target_width, target_height
+        elif target_width:
+            scale = target_width / w
+            new_w, new_h = target_width, int(h * scale)
+        else:  # target_height
+            scale = target_height / h
+            new_w, new_h = int(w * scale), target_height
+        
         img = cv2.resize(img, (new_w, new_h))
-        print(f"📐 ปรับขนาดภาพจาก {w}x{h} เป็น {new_w}x{new_h}")
+        print(f"✅ ปรับขนาดเป็น: {new_w} x {new_h} pixels")
     
     # ประมวลผลขอบแบบเร็ว
     blurred = cv2.GaussianBlur(img, (3, 3), 0)
     edges = cv2.Canny(blurred, 60, 150)
     
     # หา contours แบบเร็ว
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)  # ใช้ algorithm ที่เร็วขึ้น
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)
     
     print(f"🔍 พบ contours จำนวน: {len(contours)}")
     return img, contours
@@ -55,6 +66,7 @@ class DrawingOptimizer:
         self.origin_set = False
         self.should_stop = False
         self.drawing_speed = "fast"  # เปลี่ยนเป็น fast เพื่อความแม่นยำ
+        self.key_pressed = None
         
     def show_preview(self, img, contours):
         print("🖼️ กำลังสร้าง preview...")
@@ -79,9 +91,48 @@ class DrawingOptimizer:
         print(f"   - Contours ที่จะวาด: {len(valid_contours)}")
         print(f"   - จำนวนจุดทั้งหมด: {total_points}")
         
-        # บันทึก preview
-        cv2.imwrite("preview_optimized.png", preview_img)
-        print("✅ บันทึก preview เป็นไฟล์: preview_optimized.png")
+        # แสดงข้อมูลหน้าจอ
+        screen_width, screen_height = pyautogui.size()
+        print(f"🖥️  ขนาดหน้าจอ: {screen_width} x {screen_height} pixels")
+        print(f"📊 เปรียบเทียบ: ภาพคือ {(img.shape[1]/screen_width)*100:.1f}% ของความกว้างหน้าจอ")
+        
+        # สร้าง preview ขนาดเท่าจริงที่จะวาด (overlay บนพื้นหลัง)
+        screen_preview = np.zeros((screen_height, screen_width, 3), dtype=np.uint8)
+        screen_preview[:, :] = (40, 40, 40)  # พื้นหลังสีเทาเข้ม
+        
+        # วาง preview ที่มุมซ้ายบน (0, 0)
+        h, w = preview_img.shape[:2]
+        if h <= screen_height and w <= screen_width:
+            screen_preview[0:h, 0:w] = preview_img
+            # วาดกรอบสีแดงรอบภาพ
+            cv2.rectangle(screen_preview, (0, 0), (w-1, h-1), (0, 0, 255), 2)
+            cv2.putText(screen_preview, f"Drawing Area: {w}x{h}px", (10, h+30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        # บันทึก preview ทั้งสอง
+        cv2.imwrite("preview_drawing.png", preview_img)
+        cv2.imwrite("preview_fullscreen.png", screen_preview)
+        print("✅ บันทึก preview:")
+        print("   - preview_drawing.png (ขนาดภาพที่จะวาด)")
+        print("   - preview_fullscreen.png (เทียบกับหน้าจอจริง)")
+        
+        # แสดง preview บนหน้าจอ
+        try:
+            cv2.namedWindow('Preview - Full Screen Comparison', cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty('Preview - Full Screen Comparison', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.imshow('Preview - Full Screen Comparison', screen_preview)
+            print("\n👁️  กำลังแสดง preview เต็มจอ...")
+            print("   - พื้นที่สีเทา = หน้าจอของคุณ")
+            print("   - กรอบสี���ดง = พื้นที่ที่จะวาด")
+            print("   - กด 'q' เพื่อปิด preview")
+            
+            while True:
+                key = cv2.waitKey(100) & 0xFF
+                if key == ord('q') or cv2.getWindowProperty('Preview - Full Screen Comparison', cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            cv2.destroyAllWindows()
+        except:
+            print("⚠️ ไม่สามารถแสดง preview บนหน้าจอได้ กรุณาเปิดไฟล์ preview_fullscreen.png")
         
         # เลือกความเร็ว
         print("\n⚡ เลือกความเร็วการวาด (แนะนำ: fast สำหรับความแม่นยำ):")
@@ -108,29 +159,50 @@ class DrawingOptimizer:
         input("\nกด Enter เพื่อเริ่มทำงาน...")
         return valid_contours
     
-    def on_press(self, key):
-        try:
-            if key == keyboard.Key.f6:
-                self.origin_x, self.origin_y = pyautogui.position()
-                self.origin_set = True
-                print(f"✅ Origin ถูกตั้งไว้ที่: ({self.origin_x}, {self.origin_y})")
+    def check_keyboard_simple(self):
+        """ตรวจสอบคีย์บอร์ดแบบง่าย ๆ โดยไม่ใช้ pynput (แก้ปัญหา macOS Sequoia)"""
+        print("\n⌨️ คำแนะนำการใช้งาน:")
+        print("   1. กด F6 = ตั้งตำแหน่ง Origin (จุดเริ่มต้นวาด)")
+        print("   2. กด ESC หรือ Ctrl+C = หยุดการวาด")
+        print("   3. ใช้ Accessibility Keyboard หรือ Better Touch Tool สำหรับ hotkey")
+        print("\n💡 เนื่องจาก macOS Sequoia มีข้อจำกัดด้าน Security:")
+        print("   - โปรแกรมจะใช้ระบบตรวจจับตำแหน่ง Mouse แทน")
+        print("   - ให้เลื่อน Mouse ไปตำแหน่งที่ต้องการ แล้วรอ 2 วินาที = ตั้ง Origin")
+        
+    def wait_for_origin_by_mouse(self):
+        """รอให้ผู้ใช้เลื่อน mouse ไปตำแหน่งที่ต้องการและหยุดไว้ 2 วินาที"""
+        print("\n⏱️  เลื่อน Mouse ไปที่ตำแหน่งเริ่มต้น และอย่าขยับ Mouse เป็นเวลา 2 วินาที...")
+        print("   (หรือกด Ctrl+C เพื่อยกเลิก)")
+        
+        last_pos = None
+        still_count = 0
+        required_still_count = 20  # 2 วินาที (0.1 x 20)
+        
+        while not self.should_stop:
+            try:
+                current_pos = pyautogui.position()
                 
-            elif key == keyboard.Key.esc:
+                if last_pos == current_pos:
+                    still_count += 1
+                    if still_count >= required_still_count:
+                        self.origin_x, self.origin_y = current_pos
+                        self.origin_set = True
+                        print(f"\n✅ ตั้ง Origin ที่: ({self.origin_x}, {self.origin_y})")
+                        return True
+                    elif still_count % 5 == 0:
+                        print(f"   รอ... {still_count // 5}/{required_still_count // 5}")
+                else:
+                    still_count = 0
+                    last_pos = current_pos
+                
+                time.sleep(0.1)
+                
+            except KeyboardInterrupt:
                 self.should_stop = True
-                print("⛔ หยุดการวาดแล้ว")
-                
-        except Exception as e:
-            print(f"⚠️ ข้อผิดพลาดในการรับคีย์: {e}")
-    
-    def wait_keypress(self):
-        print("\n⌨️ กด F6 เพื่อตั้ง origin / กด ESC เพื่อหยุดการวาด")
-
-        def key_listener(key):
-            self.on_press(key)
-
-        listener = keyboard.Listener(on_press=key_listener)
-        listener.daemon = True
-        listener.start()
+                print("\n❌ ยกเลิกโดยผู้ใช้")
+                return False
+        
+        return False
 
 
     
@@ -193,8 +265,7 @@ class DrawingOptimizer:
         optimized_contours = self.optimize_contour_order(contours)
         speed_config = SPEED_SETTINGS[self.drawing_speed]
         
-        print(f"\n🎨 เริ่มวาด... (กด ESC เพื่อหยุดได้ตลอดเวลา)")
-        print(f"📊 จำนวน contours ที่จะวาด: {len(optimized_contours)}")
+        print(f"\n📊 จำนวน contours ที่จะวาด: {len(optimized_contours)}")
         
         start_time = time.time()
         contours_drawn = 0
@@ -256,8 +327,27 @@ def main():
     print("=" * 50)
     
     try:
+        # ถามขนาดภาพที่ต้องการ
+        print("\n📐 ต้องการปรับขนาดภาพไหม?")
+        print("1. ใช้ขนาดต้นฉบับ")
+        print("2. กำหนดความกว้าง (Width)")
+        print("3. กำหนดความสูง (Height)")
+        print("4. กำหนดทั้ง Width และ Height")
+        
+        choice = input("เลือก (1-4): ").strip()
+        
+        target_w, target_h = None, None
+        
+        if choice == "2":
+            target_w = int(input("ความกว้างที่ต้องการ (pixels): "))
+        elif choice == "3":
+            target_h = int(input("ความสูงที่ต้องการ (pixels): "))
+        elif choice == "4":
+            target_w = int(input("ความกว้างที่ต้องการ (pixels): "))
+            target_h = int(input("ความสูงที่ต้องการ (pixels): "))
+        
         # โหลดและประมวลผลภาพ
-        img, contours = load_and_process_image("image.png")
+        img, contours = load_and_process_image("image.png", target_w, target_h)
         
         # สร้าง optimizer
         optimizer = DrawingOptimizer()
@@ -269,25 +359,41 @@ def main():
             print("❌ ไม่มี contours ที่สามารถวาดได้")
             return
         
-        # รอการกดปุ่มใน thread แยก
-        key_thread = threading.Thread(target=optimizer.wait_keypress, daemon=True)
-        key_thread.start()
+        # แสดงคำแนะนำและรอตั้ง origin ด้วย mouse
+        optimizer.check_keyboard_simple()
         
-        print("\n⌛ รอให้กด F6 เพื่อกำหนดตำแหน่ง origin...")
-        while not optimizer.origin_set and not optimizer.should_stop:
-            time.sleep(0.01)
+        if not optimizer.wait_for_origin_by_mouse():
+            print("❌ ไม่ได้ตั้ง origin - ยกเลิกการทำงาน")
+            return
         
         if optimizer.should_stop:
             print("❌ ผู้ใช้ยกเลิกการทำงาน")
             return
         
         # รอเตรียมตัวก่อนวาด
-        print("⏳ เริ่มวาดใน 2 วินาที...")
-        time.sleep(2)
+        print("\n⏳ เริ่มวาดใน 3 วินาที... (กด Ctrl+C เพื่อยกเลิก)")
+        try:
+            for i in range(3, 0, -1):
+                if optimizer.should_stop:
+                    print("❌ ผู้ใช้ยกเลิกการทำงาน")
+                    return
+                print(f"   {i}...")
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n❌ ยกเลิกโดยผู้ใช้")
+            return
         
         # เริ่มวาด
-        optimizer.draw(valid_contours)
+        print("\n🎨 เริ่มวาด! (กด Ctrl+C เพื่อหยุดฉุกเฉิน)")
+        try:
+            optimizer.draw(valid_contours)
+        except KeyboardInterrupt:
+            print("\n⛔ หยุดการวาดโดยผู้ใช้")
         
+        print("\n✅ โปรแกรมเสร็จสิ้น")
+        
+    except KeyboardInterrupt:
+        print("\n❌ ผู้ใช้กด Ctrl+C - ยกเลิกการทำงาน")
     except FileNotFoundError as e:
         print(e)
     except Exception as e:
