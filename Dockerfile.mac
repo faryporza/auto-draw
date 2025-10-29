@@ -1,0 +1,31 @@
+# Dockerfile สำหรับ macOS
+# Note: Docker on macOS ไม่สามารถควบคุม GUI ได้โดยตรง
+# ควรรันโค้ดนี้บน macOS host โดยตรงแทน
+
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# ติดตั้ง system dependencies สำหรับ OpenCV
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgl1-mesa-glx \
+    && rm -rf /var/lib/apt/lists/*
+
+# คัดลอก requirements
+COPY requirements-mac.txt .
+
+# ติดตั้ง dependencies
+RUN pip install --no-cache-dir -r requirements-mac.txt
+
+# คัดลอกไฟล์โค้ด
+COPY mac.py .
+COPY image.png .
+
+# หมายเหตุ: Docker container ไม่สามารถควบคุม mouse/keyboard ของ host ได้
+# แนะนำให้รันโดยตรงบน macOS แทน
+CMD ["python", "mac.py"]

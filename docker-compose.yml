@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  # Service สำหรับ Windows
+  auto-draw-windows:
+    build:
+      context: .
+      dockerfile: Dockerfile.windows
+    image: auto-draw-windows:latest
+    volumes:
+      - .:/app
+    environment:
+      - DISPLAY=${DISPLAY}
+    # หมายเหตุ: Docker ไม่แนะนำให้ใช้สำหรับ GUI automation
+    # ควรรันโดยตรงบน host แทน
+    profiles:
+      - windows
+
+  # Service สำหรับ macOS
+  auto-draw-mac:
+    build:
+      context: .
+      dockerfile: Dockerfile.mac
+    image: auto-draw-mac:latest
+    volumes:
+      - .:/app
+    environment:
+      - DISPLAY=${DISPLAY}
+    # หมายเหตุ: Docker ไม่แนะนำให้ใช้สำหรับ GUI automation
+    # ควรรันโดยตรงบน host แทน
+    profiles:
+      - mac
