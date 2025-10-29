@@ -5,8 +5,8 @@ import keyboard  # ต้องติดตั้งด้วย pip install key
 import pydirectinput  # ต้องติดตั้งด้วย pip install pydirectinput
 import pyautogui
 import numpy as np # เพิ่มเข้ามา
-
-# โหลดภาพและหาเส้นขอบ
+ 
+# โหลดภาพและหาเส้นขอบ 
 img = cv2.imread("image.png", 0)
 if img is None:
     print("❌ ไม่พบไฟล์ image.png หรือไฟล์เสียหาย")
