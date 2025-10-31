@@ -6,16 +6,38 @@ import numpy as np
 from collections import deque
 import math
 
-# แก้ปัญหา keyboard listener บน macOS Sequoia
-import sys
-import select
+# ตรวจสอบ macOS version
+import platform
+macos_version = None
+try:
+    if platform.system() == "Darwin":
+        version_str = platform.mac_ver()[0]
+        major = int(version_str.split('.')[0])
+        macos_version = major
+except:
+    pass
+
+# ปิด pynput บน macOS Sequoia (15.x) เนื่องจาก security restrictions
+DISABLE_PYNPUT = (macos_version and macos_version >= 15)
+
+# ใช้ pynput สำหรับ keyboard แบบปลอดภัย (ถ้าไม่ใช่ Sequoia)
+PYNPUT_AVAILABLE = False
+if not DISABLE_PYNPUT:
+    try:
+        from pynput import keyboard
+        PYNPUT_AVAILABLE = True
+    except ImportError:
+        print("⚠️ ไม่พบ pynput - ใช้โหมด mouse detection แทน")
+else:
+    print("⚠️ macOS Sequoia detected - ปิด keyboard listener เพื่อความปลอดภัย")
+    print("   จะใช้โหมด mouse detection แทน")
 
 # ปรับปรุงประสิทธิภาพ pyautogui
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.0001  # ลดให้ต่ำสุด
 
 # โหลดภาพและประมวลผลอย่างมีประสิทธิภาพ
-def load_and_process_image(image_path, target_width=None, target_height=None):
+def load_and_process_image(image_path, target_width=None, target_height=None, detail_level="normal"):
     print("🔄 กำลังโหลดและประมวลผลภาพ...")
     
     # โหลดภาพเป็น grayscale โดยตรง
@@ -40,14 +62,28 @@ def load_and_process_image(image_path, target_width=None, target_height=None):
         img = cv2.resize(img, (new_w, new_h))
         print(f"✅ ปรับขนาดเป็น: {new_w} x {new_h} pixels")
     
-    # ประมวลผลขอบแบบเร็ว
-    blurred = cv2.GaussianBlur(img, (3, 3), 0)
-    edges = cv2.Canny(blurred, 60, 150)
+    # ตั้งค่า Canny threshold ตามระดับความละเอียด
+    if detail_level == "low":
+        canny_low, canny_high = 80, 200  # จับเส้นหนาๆ น้อย
+        blur_size = (5, 5)
+        approx_method = cv2.CHAIN_APPROX_SIMPLE
+    elif detail_level == "high":
+        canny_low, canny_high = 30, 100  # จับเส้นบางๆ เยอะ
+        blur_size = (3, 3)
+        approx_method = cv2.CHAIN_APPROX_NONE  # เก็บทุกจุด
+    else:  # normal
+        canny_low, canny_high = 60, 150
+        blur_size = (3, 3)
+        approx_method = cv2.CHAIN_APPROX_TC89_KCOS
     
-    # หา contours แบบเร็ว
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_KCOS)
+    # ประมวลผลขอบ
+    blurred = cv2.GaussianBlur(img, blur_size, 0)
+    edges = cv2.Canny(blurred, canny_low, canny_high)
     
-    print(f"🔍 พบ contours จำนวน: {len(contours)}")
+    # หา contours
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, approx_method)
+    
+    print(f"🔍 พบ contours จำนวน: {len(contours)} (ระดับความละเอียด: {detail_level})")
     return img, contours
 
 # ตั้งค่าความเร็วที่เร็วขึ้น
@@ -66,7 +102,7 @@ class DrawingOptimizer:
         self.origin_set = False
         self.should_stop = False
         self.drawing_speed = "fast"  # เปลี่ยนเป็น fast เพื่อความแม่นยำ
-        self.key_pressed = None
+        self.listener = None
         
     def show_preview(self, img, contours):
         print("🖼️ กำลังสร้าง preview...")
@@ -77,8 +113,8 @@ class DrawingOptimizer:
         valid_contours = []
         total_points = 0
         
-        # กรอง contours ที่มีขนาดพอเหมาะ
-        min_contour_length = 15
+        # ลดค่า min_contour_length เพื่อให้วาดเส้นสั้นๆ ด้วย (จาก 15 เป็น 3)
+        min_contour_length = 3
         for cnt in contours:
             if len(cnt) >= min_contour_length:
                 valid_contours.append(cnt)
@@ -159,16 +195,45 @@ class DrawingOptimizer:
         input("\nกด Enter เพื่อเริ่มทำงาน...")
         return valid_contours
     
-    def check_keyboard_simple(self):
-        """ตรวจสอบคีย์บอร์ดแบบง่าย ๆ โดยไม่ใช้ pynput (แก้ปัญหา macOS Sequoia)"""
-        print("\n⌨️ คำแนะนำการใช้งาน:")
-        print("   1. กด F6 = ตั้งตำแหน่ง Origin (จุดเริ่มต้นวาด)")
-        print("   2. กด ESC หรือ Ctrl+C = หยุดการวาด")
-        print("   3. ใช้ Accessibility Keyboard หรือ Better Touch Tool สำหรับ hotkey")
-        print("\n💡 เนื่องจาก macOS Sequoia มีข้อจำกัดด้าน Security:")
-        print("   - โปรแกรมจะใช้ระบบตรวจจับตำแหน่ง Mouse แทน")
-        print("   - ให้เลื่อน Mouse ไปตำแหน่งที่ต้องการ แล้วรอ 2 วินาที = ตั้ง Origin")
+    def on_press(self, key):
+        """Callback สำหรับ pynput keyboard listener"""
+        try:
+            # F6 = ตั้ง origin
+            if hasattr(key, 'name') and key.name == 'f6':
+                self.origin_x, self.origin_y = pyautogui.position()
+                self.origin_set = True
+                print(f"\n✅ กด F6 - ตั้ง Origin ที่: ({self.origin_x}, {self.origin_y})")
+            # ESC = หยุดวาด
+            elif key == keyboard.Key.esc:
+                self.should_stop = True
+                print("\n⛔ กด ESC - หยุดการวาด")
+        except AttributeError:
+            pass
+        except Exception as e:
+            print(f"⚠️ Keyboard error: {e}")
+    
+    def start_keyboard_listener(self):
+        """เริ่ม keyboard listener (ถ้ามี pynput และไม่ใช่ Sequoia)"""
+        if not PYNPUT_AVAILABLE:
+            return False
         
+        try:
+            self.listener = keyboard.Listener(on_press=self.on_press)
+            self.listener.daemon = True
+            self.listener.start()
+            print("\n⌨️ Keyboard listener พร้อมใช้งาน:")
+            print("   - กด F6 เพื่อตั้ง Origin")
+            print("   - กด ESC เพื่อหยุดวาด")
+            return True
+        except Exception as e:
+            print(f"⚠️ ไม่สามารถเริ่ม keyboard listener: {e}")
+            if self.listener:
+                try:
+                    self.listener.stop()
+                except:
+                    pass
+            return False
+    
     def wait_for_origin_by_mouse(self):
         """รอให้ผู้ใช้เลื่อน mouse ไปตำแหน่งที่ต้องการและหยุดไว้ 2 วินาที"""
         print("\n⏱️  เลื่อน Mouse ไปที่ตำแหน่งเริ่มต้น และอย่าขยับ Mouse เป็นเวลา 2 วินาที...")
@@ -178,7 +243,7 @@ class DrawingOptimizer:
         still_count = 0
         required_still_count = 20  # 2 วินาที (0.1 x 20)
         
-        while not self.should_stop:
+        while not self.should_stop and not self.origin_set:
             try:
                 current_pos = pyautogui.position()
                 
@@ -202,7 +267,7 @@ class DrawingOptimizer:
                 print("\n❌ ยกเลิกโดยผู้ใช้")
                 return False
         
-        return False
+        return self.origin_set
 
 
     
@@ -211,8 +276,8 @@ class DrawingOptimizer:
         if not contours:
             return []
         
-        # กรอง contours ที่สั้นเกินไป
-        filtered = [cnt for cnt in contours if len(cnt) >= 10]
+        # ลดค่า min length เพื่อให้วาดเส้นสั้นๆ ด้วย (จาก 10 เป็น 3)
+        filtered = [cnt for cnt in contours if len(cnt) >= 3]
         if not filtered:
             return []
         
@@ -257,11 +322,11 @@ class DrawingOptimizer:
             y = self.origin_y + int(pt[1])
             
             # ใช้ duration ที่เร็วมากเพื่อวาดให้ต่อเนื่อง
-            pyautogui.moveTo(x, y, duration=speed_config["draw_duration"])
+            # เพิ่ม _pause เล็กน้อยเพื่อให้ระบบทันตาม
+            pyautogui.moveTo(x, y, duration=speed_config["draw_duration"], _pause=False)
     
     def draw(self, contours):
         """ฟังก์ชันวาดหลักที่ปรับปรุงให้เร็วขึ้น"""
-        self.should_stop = False
         optimized_contours = self.optimize_contour_order(contours)
         speed_config = SPEED_SETTINGS[self.drawing_speed]
         
@@ -273,6 +338,7 @@ class DrawingOptimizer:
         
         for i, cnt in enumerate(optimized_contours):
             if self.should_stop:
+                print(f"\n⛔ หยุดวาดที่ contour {i+1}/{len(optimized_contours)}")
                 break
             
             points = cnt.squeeze()
@@ -306,10 +372,11 @@ class DrawingOptimizer:
             contours_drawn += 1
             points_drawn += len(points)
             
-            # แสดงความคืบหน้า
-            if (i + 1) % 10 == 0:
+            # แสดงความคืบหน้าทุก contour ถ้าน้อยกว่า 50 เส้น หรือทุก 10 เส้นถ้าเยอะ
+            show_every = 1 if len(optimized_contours) <= 50 else 10
+            if (i + 1) % show_every == 0 or (i + 1) == len(optimized_contours):
                 progress = (i + 1) / len(optimized_contours) * 100
-                print(f"📈 ความคืบหน้า: {progress:.1f}% ({i + 1}/{len(optimized_contours)})")
+                print(f"📈 ความคืบหน้า: {progress:.1f}% ({i + 1}/{len(optimized_contours)} contours, {points_drawn} จุด)")
         
         end_time = time.time()
         total_time = end_time - start_time
@@ -346,8 +413,23 @@ def main():
             target_w = int(input("ความกว้างที่ต้องการ (pixels): "))
             target_h = int(input("ความสูงที่ต้องการ (pixels): "))
         
+        # ถามระดับความละเอียดในการจับเส้น
+        print("\n🔍 เลือกระดับความละเอียดในการจับเส้น:")
+        print("1. ต่ำ (low) - จับเฉพาะเส้นหนาๆ ชัดเจน")
+        print("2. ปานกลาง (normal) - สมดุล ✅ แนะนำ")
+        print("3. สูง (high) - จับทุกเส้นรวมถึงเส้นบางๆ เยอะมาก")
+        
+        detail_choice = input("เลือก (1-3) หรือ Enter = normal: ").strip()
+        
+        if detail_choice == "1":
+            detail_level = "low"
+        elif detail_choice == "3":
+            detail_level = "high"
+        else:
+            detail_level = "normal"
+        
         # โหลดและประมวลผลภาพ
-        img, contours = load_and_process_image("image.png", target_w, target_h)
+        img, contours = load_and_process_image("image.png", target_w, target_h, detail_level)
         
         # สร้าง optimizer
         optimizer = DrawingOptimizer()
@@ -359,12 +441,22 @@ def main():
             print("❌ ไม่มี contours ที่สามารถวาดได้")
             return
         
-        # แสดงคำแนะนำและรอตั้ง origin ด้วย mouse
-        optimizer.check_keyboard_simple()
+        # เริ่ม keyboard listener
+        keyboard_ok = optimizer.start_keyboard_listener()
         
-        if not optimizer.wait_for_origin_by_mouse():
-            print("❌ ไม่ได้ตั้ง origin - ยกเลิกการทำงาน")
-            return
+        if keyboard_ok:
+            # ใช้ F6 และ ESC
+            print("\n⌛ รอให้กด F6 เพื่อตั้ง Origin...")
+            while not optimizer.origin_set and not optimizer.should_stop:
+                time.sleep(0.1)
+        else:
+            # Fallback: ใช้ mouse detection
+            print("\n💡 โหมด Mouse Detection:")
+            print("   - เลื่อน Mouse ไปตำแหน่งที่ต้องการ")
+            print("   - อย่าขยับ Mouse 2 วินาที = ตั้ง Origin")
+            if not optimizer.wait_for_origin_by_mouse():
+                print("❌ ไม่ได้ตั้ง origin - ยกเลิกการทำงาน")
+                return
         
         if optimizer.should_stop:
             print("❌ ผู้ใช้ยกเลิกการทำงาน")
@@ -384,11 +476,15 @@ def main():
             return
         
         # เริ่มวาด
-        print("\n🎨 เริ่มวาด! (กด Ctrl+C เพื่อหยุดฉุกเฉิน)")
+        print("\n🎨 เริ่มวาด! (กด ESC หรือ Ctrl+C เพื่อหยุด)")
         try:
             optimizer.draw(valid_contours)
         except KeyboardInterrupt:
             print("\n⛔ หยุดการวาดโดยผู้ใช้")
+        
+        # หยุด keyboard listener
+        if optimizer.listener:
+            optimizer.listener.stop()
         
         print("\n✅ โปรแกรมเสร็จสิ้น")
         

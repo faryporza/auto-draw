@@ -21,7 +21,7 @@
 python3.9 -m venv .venv
 
 # เปิดใช้งาน virtual environment
-source .venv/bin/activate
+source env/bin/activate
 
 # ติดตั้ง dependencies
 pip install -r requirements-mac.txt
@@ -60,7 +60,7 @@ docker-compose --profile windows up
 ### macOS:
 ```bash
 # เปิดใช้งาน virtual environment
-source .venv/bin/activate
+source env/bin/activate
 
 # รันโปรแกรม
 python mac.py
