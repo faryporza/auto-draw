@@ -34,7 +34,7 @@ else:
 
 # ปรับปรุงประสิทธิภาพ pyautogui
 pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0.0001  # ลดให้ต่ำสุด
+pyautogui.PAUSE = 0  # ปิด pause เพื่อความเร็วสูงสุด
 
 # โหลดภาพและประมวลผลอย่างมีประสิทธิภาพ
 def load_and_process_image(image_path, target_width=None, target_height=None, detail_level="normal"):
@@ -321,9 +321,8 @@ class DrawingOptimizer:
             x = self.origin_x + int(pt[0])
             y = self.origin_y + int(pt[1])
             
-            # ใช้ duration ที่เร็วมากเพื่อวาดให้ต่อเนื่อง
-            # เพิ่ม _pause เล็กน้อยเพื่อให้ระบบทันตาม
-            pyautogui.moveTo(x, y, duration=speed_config["draw_duration"], _pause=False)
+            # ใช้ duration=0 เพื่อความเร็วสูงสุด, ให้ pyautogui.PAUSE ควบคุมความเร็ว
+            pyautogui.moveTo(x, y, duration=0, _pause=False)
     
     def draw(self, contours):
         """ฟังก์ชันวาดหลักที่ปรับปรุงให้เร็วขึ้น"""
@@ -351,23 +350,16 @@ class DrawingOptimizer:
             
             # เคลื่อนที่ไปยังจุดเริ่มต้น (ยกปากกาขึ้น)
             pyautogui.mouseUp()
-            pyautogui.moveTo(start_x, start_y, duration=speed_config["move_duration"])
-            time.sleep(0.001)
+            pyautogui.moveTo(start_x, start_y, duration=0)
             
             # เริ่มวาด (กดปากกาลง)
             pyautogui.mouseDown()
-            time.sleep(0.001)
             
             # วาดทุกจุดตามลำดับ ไม่ข้าม
             self.draw_contour_smooth(points[1:], speed_config)
             
             # จบ contour นี้ (ยกปากกาขึ้น)
             pyautogui.mouseUp()
-            time.sleep(0.001)
-            
-            # พักเบาๆ ระหว่าง contours
-            if speed_config["line_delay"] > 0:
-                time.sleep(speed_config["line_delay"])
             
             contours_drawn += 1
             points_drawn += len(points)
